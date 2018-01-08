@@ -30,6 +30,20 @@ class MeanSquareError(ErrorFunc):
     @staticmethod
     def deriv(y, predict_y):
         return -2 / y.shape[0] * (y - predict_y)  # Nx1 array
+
+class MeanRankedProbScore(ErrorFunc):
+    @staticmethod
+    def error(y, predict_y):
+        return ( ( np.cumsum(y, axis=1) - np.cumsum(predict_y, axis=1) ) ** 2 / (y.shape[1]-1) ).sum() / y.shape[0]
+    
+    @staticmethod
+    def deriv(y, predict_y):
+        y_cumsum = np.cumsum(y, axis=1)
+        predict_y_cumsum = np.cumsum(predict_y, axis=1)
+        z = np.zeros_like(y, dtype=float)
+        for i in range(y.shape[1]):
+            z[:, i] = (y_cumsum[:, i:] - predict_y_cumsum[:, i:]).sum(axis=1)
+        return -z / y.shape[0] / (y.shape[1] - 1)
     
 class LogLoss(ErrorFunc):
     @staticmethod
@@ -98,21 +112,15 @@ class SinAct(Activation):
     def deriv(y):
         return np.cos(x)
 
-class Softmax(Activation):
+class MultiSoftmax(Activation):
     @staticmethod
     def act(x):
         return np.exp(x) / np.sum(np.exp(x), axis=1).reshape(x.shape[0],1)
     
     @staticmethod
     def deriv(y):
-        z = np.ones((y.shape[0], y.shape[1], y.shape[1]), dtype=float)
-        for row in range(y.shape[0]):
-            for i in range(y.shape[1]):
-                for j in range(y.shape[1]):
-                    if i == j:
-                        z[row, i, j] = y[row, i] * (1 - y[row, i])
-                    else:
-                        z[row, i, j] = - y[row, i] ** 2
+        z = - np.einsum('ij,ik->ijk', y, y) #simplified
+        z[:, np.arange(y.shape[1]), np.arange(y.shape[1])] += y
         return z
     
     @staticmethod

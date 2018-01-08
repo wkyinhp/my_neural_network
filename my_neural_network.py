@@ -30,48 +30,29 @@ class NeuralNetwork:
         self.activations = activations
         
     
-    def train(self, training_rate, num_iter, error_func=None, display_interval=None):
+    def train(self, training_rate, n_iter, error_func=None, display_interval=None, batch=10, tol=1e-8,
+              decreasing_rate=False, min_rate=1e-8):
         """error_func | the function for calculating error given y and predicted y, if None, mean square error is used
+                      | must have a signature of (y, y_pred)
         """
         if error_func is None:
             error_func = MeanSquareError
         if not issubclass(error_func, ErrorFunc):
             return TypeError("error_func has to be subclass of ErrorFunc")
         if display_interval is None:
-            display_interval = int(num_iter/100)
+            display_interval = int(n_iter/100)
         
-        errors = {}
-        for i in range(num_iter):
-            layers = [self.x]
-            
-            for w_layer, b_layer, act_layer in zip(self.w, self.b, self.activations): #w, b and act of the layer
-                layers.append(act_layer.act(layers[-1].dot(w_layer) + b_layer))
-            
-            #error_y = error_func.error(self.y, layers[-1])
+        errors, prev_error = {}, None
+        Xs, Ys = np.array_split(np.asarray(self.x), batch), np.array_split(np.asarray(self.y), batch)
+        for i in range(n_iter):
+            error = sum([self.step(x, y, training_rate/batch, error_func) for x, y in zip(Xs, Ys)]) / batch
             if display_interval != 0 and i % display_interval == 0:
-                error_y = error_func.error(self.y, layers[-1])
-                errors[i] = error_y
-            for layer in range(len(self.w)-1, 0, -1):
-                act_deriv = self.activations[layer].deriv(layers[layer+1])
-                if len(act_deriv.shape) > 3:
-                    raise ValueError("act_deriv is too high dimension, dimension %s"%len(act_deriv.shape))
-            #for w_layer, b_layer, act_layer in zip(reversed(self.w), reversed(self.b), reversed(self.activations)):
-                if layer == len(self.w) - 1: # last layer
-                    if len(act_deriv.shape) < 3:
-                        error_delta = error_func.deriv(self.y, layers[-1]) * act_deriv
-                    else: # == 3
-                        error_delta = np.einsum('ij,ijk->ik', error_func.deriv(self.y, layers[-1]), act_deriv)
-                        #error_delta = np.array([a_.dot(b_) for a_, b_ in zip(error_func.deriv(self.y, layers[-1]), act_deriv)])
-                
-                else: # not last layer
-                    if len(act_deriv.shape) < 3:
-                        error_delta = error_delta.dot(self.w[layer+1].T) * act_deriv
-                    else:
-                        error_delta = np.einsum('ij,ijk->ik', error_delta.dot(self.w[layer+1]), act_deriv)
-                        #error_delta = np.array([a_.dot(b_) for a_, b_ in zip(error_delta.dot(self.w[layer+1]), act_deriv)])
-                
-                self.w[layer] -= training_rate * layers[layer].T.dot( error_delta )
-                self.b[layer] -= training_rate * np.sum(error_delta, axis=0)
+                errors[i] = error
+            if (tol and prev_error and abs(prev_error - error) < tol) or training_rate < min_rate:
+                break
+            if decreasing_rate and prev_error and error > prev_error:
+                training_rate *= 0.95
+            
         return errors
                 
     
@@ -126,14 +107,41 @@ class NeuralNetwork:
         with open(location, "wb") as f:
             pickle.dump(self,f)
             
+    def step(self, x, y, training_rate, error_func):
+        layers = [x]
+            
+        for w_layer, b_layer, act_layer in zip(self.w, self.b, self.activations): #w, b and act of the layer
+            layers.append(act_layer.act(layers[-1].dot(w_layer) + b_layer))
+        
+        for layer in range(len(self.w)-1, 0, -1):
+            act_deriv = self.activations[layer].deriv(layers[layer+1])
+            if len(act_deriv.shape) > 3:
+                raise ValueError("act_deriv is too high dimension, dimension %s"%len(act_deriv.shape))
+            if layer == len(self.w) - 1: # last layer
+                if len(act_deriv.shape) < 3:
+                    error_delta = error_func.deriv(self.y, layers[-1]) * act_deriv
+                else: # == 3
+                    error_delta = np.einsum('ij,ijk->ik', error_func.deriv(y, layers[-1]), act_deriv)
+                
+            else: # not last layer
+                if len(act_deriv.shape) < 3:
+                    error_delta = error_delta.dot(self.w[layer+1].T) * act_deriv
+                else:
+                    error_delta = np.einsum('ij,ijk->ik', error_delta.dot(self.w[layer+1]), act_deriv)
+                
+            self.w[layer] -= training_rate * layers[layer].T.dot( error_delta )
+            self.b[layer] -= training_rate * np.sum(error_delta, axis=0)
+        
+        return error_func.error(y, layers[-1])
+            
 
 X, Y = load_iris(True)
 
 np.random.seed(1048)
 yy = [[1,0,0],[0,1,0],[0,0,1]]
-my_Y = np.array([yy[i] for i in Y]) # turn Y(0,1,2) to my_Y([1,0,0] or ...)
-nn = NeuralNetwork(X, my_Y, [5, 6, 3], None, [ReLU(0.1), ReLU(0.1), Softmax])
-nn.train(0.05, 1000, LogLoss, 200)
+my_Y = np.array([yy[i] for i in Y])
+nn = NeuralNetwork(X, my_Y, [5, 6, 3], None, [ELU(1), ELU(1), MultiSoftmax])
+nn.train(0.01, 3000, MeanRankedProbScore, 200, batch=2, decreasing_rate=True)
 
 np.set_printoptions(suppress=True)
 #print(my_Y)
